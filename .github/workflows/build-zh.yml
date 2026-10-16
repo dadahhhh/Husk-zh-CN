@@ -1,0 +1,66 @@
+name: Build Husk Chinese IPA
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'husk-zh-overlay.zip'
+      - '.github/workflows/build-zh.yml'
+permissions:
+  contents: read
+jobs:
+  ipa:
+    runs-on: macos-26
+    timeout-minutes: 90
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+      DD: ${{ github.workspace }}/build/DerivedData
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: package
+      - uses: actions/checkout@v4
+        with:
+          repository: Leviidev/Husk
+          ref: '2.0'
+          path: source
+      - name: Apply reviewed Chinese source overlay
+        run: unzip -oq package/husk-zh-overlay.zip -d source
+      - name: Install build tools
+        run: |
+          brew install xcodegen
+          rustup target add aarch64-apple-ios
+          xcodebuild -downloadComponent MetalToolchain
+      - name: Prepare matching official native libraries and Android resources
+        run: python3 source/tools/prepare_zh_runtime.py
+      - name: Build pairing library
+        working-directory: source
+        run: ./scripts/build_rppairing_ios.sh
+      - name: Build Chinese app and IPA
+        working-directory: source
+        run: ./scripts/package_ipa.sh "$GITHUB_WORKSPACE/Husk-2.0-zh-CN.ipa"
+      - name: Verify Chinese resources, binary and signatures
+        run: |
+          mkdir verified
+          unzip -q Husk-2.0-zh-CN.ipa -d verified
+          APP=verified/Payload/Husk.app
+          test -s "$APP/husk-zh-Hans.json"
+          test -s "$APP/zh-Hans.lproj/Localizable.strings"
+          test -s "$APP/PlugIns/HuskJITHelper.appex/HuskJITHelper"
+          codesign --verify --deep --strict "$APP"
+          shasum -a 256 Husk-2.0-zh-CN.ipa | tee Husk-2.0-zh-CN.sha256
+      - name: Archive corresponding localized source
+        run: tar --exclude=.git --exclude=build --exclude=target -czf Husk-2.0-zh-CN-source.tar.gz -C source .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Husk-2.0-zh-CN
+          path: |
+            Husk-2.0-zh-CN.ipa
+            Husk-2.0-zh-CN.sha256
+            Husk-2.0-zh-CN-source.tar.gz
+          retention-days: 30
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Husk-build-diagnostics
+          path: build/DerivedData/Logs
